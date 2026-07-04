@@ -263,13 +263,29 @@ function TagInput({ tags, onChange }) {
   const inputRef = useRef();
   const recognitionRef = useRef(null);
   const isListeningRef = useRef(false);
+  const shouldKeepListeningRef = useRef(false);
+  const voiceTimeoutRef = useRef(null);
+  const voiceRestartRef = useRef(null);
   const tagsRef = useRef(tags);
 
   useEffect(() => {
     tagsRef.current = tags;
   }, [tags]);
 
+  const clearVoiceTimers = () => {
+    if (voiceTimeoutRef.current) {
+      clearTimeout(voiceTimeoutRef.current);
+      voiceTimeoutRef.current = null;
+    }
+    if (voiceRestartRef.current) {
+      clearTimeout(voiceRestartRef.current);
+      voiceRestartRef.current = null;
+    }
+  };
+
   const stopListening = () => {
+    shouldKeepListeningRef.current = false;
+    clearVoiceTimers();
     isListeningRef.current = false;
     setIsListening(false);
     setVoiceStatus("");
@@ -278,6 +294,20 @@ function TagInput({ tags, onChange }) {
         recognitionRef.current.stop();
       } catch (e) {}
     }
+  };
+
+  const extendListeningWindow = () => {
+    if (!shouldKeepListeningRef.current) return;
+    clearVoiceTimers();
+    voiceTimeoutRef.current = setTimeout(() => {
+      if (!shouldKeepListeningRef.current) return;
+      shouldKeepListeningRef.current = false;
+      setIsListening(false);
+      setVoiceStatus("Voice input paused after 5 seconds. Tap Voice to continue.");
+      try {
+        recognitionRef.current?.stop();
+      } catch (e) {}
+    }, 5000);
   };
 
   useEffect(() => {
@@ -289,7 +319,9 @@ function TagInput({ tags, onChange }) {
       return recognitionRef.current;
     }
 
-    const isSecureContext = window.isSecureContext || ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
+    const hostname = window.location.hostname;
+    const isLocalNetworkHost = /^(localhost|127\.0\.0\.1|::1|\[::1\]|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(hostname);
+    const isSecureContext = window.isSecureContext || isLocalNetworkHost;
     if (!isSecureContext) {
       setVoiceStatus("Voice input requires a secure connection. Please open this app from localhost or HTTPS.");
       return null;
@@ -297,19 +329,22 @@ function TagInput({ tags, onChange }) {
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setVoiceStatus("Voice input is not supported in this browser.");
+      setVoiceStatus("Voice input is not supported in this browser. Please try the latest Chrome or Safari on a supported device.");
       return null;
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
+      shouldKeepListeningRef.current = true;
+      isListeningRef.current = true;
       setIsListening(true);
       setVoiceStatus("Listening for ingredients...");
+      extendListeningWindow();
     };
 
     recognition.onresult = (event) => {
@@ -338,28 +373,44 @@ function TagInput({ tags, onChange }) {
         }
         setInputVal("");
         setVoiceStatus("Ingredients added from voice input.");
+        extendListeningWindow();
       } else if (interimText) {
         setInputVal(interimText);
         setVoiceStatus("Listening for ingredients...");
+        extendListeningWindow();
       }
     };
 
     recognition.onend = () => {
-      setIsListening(false);
-      if (!isListeningRef.current) {
+      if (!shouldKeepListeningRef.current) {
+        setIsListening(false);
         setVoiceStatus("");
+        return;
       }
+
+      setIsListening(true);
+      setVoiceStatus("Listening for ingredients...");
+      extendListeningWindow();
+      voiceRestartRef.current = setTimeout(() => {
+        if (shouldKeepListeningRef.current && recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (e) {}
+        }
+      }, 150);
     };
 
     recognition.onerror = (event) => {
-      setIsListening(false);
-      isListeningRef.current = false;
-
       if (event.error === "not-allowed") {
-        setVoiceStatus("Microphone access was blocked. Please allow it in Safari settings and try again.");
-      } else if (event.error === "network") {
-        setVoiceStatus("Voice input temporarily failed. Please try again.");
+        stopListening();
+        setVoiceStatus("Microphone access was blocked. Please allow it in your browser settings and try again.");
+      } else if (shouldKeepListeningRef.current && event.error !== "aborted") {
+        setIsListening(true);
+        setVoiceStatus("Listening for ingredients...");
+        extendListeningWindow();
       } else {
+        setIsListening(false);
+        isListeningRef.current = false;
         setVoiceStatus(`Voice input error: ${event.error}`);
       }
     };
@@ -398,16 +449,21 @@ function TagInput({ tags, onChange }) {
 
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        setVoiceStatus("Requesting microphone permission...");
         await navigator.mediaDevices.getUserMedia({ audio: true });
       }
+      shouldKeepListeningRef.current = true;
       isListeningRef.current = true;
       setIsListening(true);
       setVoiceStatus("Listening for ingredients...");
+      extendListeningWindow();
       recognition.start();
     } catch (e) {
+      shouldKeepListeningRef.current = false;
+      clearVoiceTimers();
       isListeningRef.current = false;
       setIsListening(false);
-      setVoiceStatus("Microphone access was blocked. Please allow it in Safari and try again.");
+      setVoiceStatus("Microphone permission was blocked or unavailable. Please allow it in your browser settings and try again.");
     }
   };
 
