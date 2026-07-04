@@ -269,6 +269,17 @@ function TagInput({ tags, onChange }) {
     tagsRef.current = tags;
   }, [tags]);
 
+  const stopListening = () => {
+    isListeningRef.current = false;
+    setIsListening(false);
+    setVoiceStatus("");
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+  };
+
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
@@ -370,9 +381,7 @@ function TagInput({ tags, onChange }) {
     }
 
     if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-      setVoiceStatus("");
+      stopListening();
       return;
     }
 
