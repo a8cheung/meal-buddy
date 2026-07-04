@@ -285,6 +285,12 @@ function TagInput({ tags, onChange }) {
   }, [isListening]);
 
   useEffect(() => {
+    const isSecureContext = window.isSecureContext || ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
+    if (!isSecureContext) {
+      setVoiceStatus("Voice input requires a secure connection. Please open this app from localhost or HTTPS.");
+      return;
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setVoiceStatus("Voice input is not supported in this browser.");
@@ -295,6 +301,11 @@ function TagInput({ tags, onChange }) {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setVoiceStatus("Listening for ingredients...");
+    };
 
     recognition.onresult = (event) => {
       let interimText = "";
@@ -387,10 +398,8 @@ function TagInput({ tags, onChange }) {
 
     try {
       recognitionRef.current.start();
-      setIsListening(true);
-      setVoiceStatus("Listening for ingredients...");
     } catch (e) {
-      setVoiceStatus("Voice input could not be started.");
+      setVoiceStatus("Voice input could not be started. Please allow microphone access and use a secure context.");
     }
   };
 
