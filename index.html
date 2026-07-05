@@ -204,8 +204,25 @@
     .compare-val.lower { color: #185fa5; }
     .compare-val.higher { color: #a32d2d; }
     .light-changes { margin-top: 10px; }
-    .light-change-item { font-size: 12px; color: var(--text-secondary); padding: 3px 0; display: flex; align-items: flex-start; gap: 6px; }
-    .light-change-item::before { content: "•"; color: #185fa5; flex-shrink: 0; margin-top: 1px; }
+    .light-change-item { font-size: 12px; color: var(--text-secondary); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
+    .light-change-item i { color: #185fa5; font-size: 13px; flex-shrink: 0; }
+    .swap-from { text-decoration: line-through; opacity: 0.75; }
+    .swap-to { color: #185fa5; font-weight: 500; }
+
+    /* Feedback: rating + comment */
+    .feedback-section { border-top: 0.5px solid var(--border); padding-top: 1rem; margin-top: 0.25rem; }
+    .rating-row { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+    .rating-label { font-size: 13px; color: var(--text-secondary); margin-right: 4px; }
+    .star-btn { background: none; border: none; cursor: pointer; font-size: 20px; color: var(--border-strong); padding: 2px; line-height: 1; }
+    .star-btn.filled { color: #e8a80c; }
+    .feedback-status { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
+    .feedback-status.error { color: var(--danger); }
+    .comment-row { display: flex; flex-direction: column; gap: 8px; }
+    .comment-input { border: 0.5px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; min-height: 44px; background: var(--surface-0); color: var(--text-primary); }
+    .comment-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,109,17,0.1); }
+    .comment-actions { display: flex; align-items: center; gap: 10px; }
+    .save-btn { padding: 6px 14px; border: none; border-radius: var(--radius); background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; font-family: inherit; }
+    .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Error */
     .error-msg { background: var(--danger-bg); border: 0.5px solid var(--danger-border); border-radius: 10px; padding: 1rem; color: var(--danger); font-size: 14px; margin-bottom: 1rem; }
@@ -247,6 +264,13 @@ const CUISINES = [
 
 const FOOD_GROUPS = ["Grains", "Protein", "Dairy", "Fruits", "Vegetables", "Fats"];
 
+function getApiBase() {
+  if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+    return "http://127.0.0.1:8001";
+  }
+  return "";
+}
+
 const FG_COLORS = {
   Grains: "#ef9f27",
   Protein: "#d85a30",
@@ -263,29 +287,24 @@ function TagInput({ tags, onChange }) {
   const inputRef = useRef();
   const recognitionRef = useRef(null);
   const isListeningRef = useRef(false);
-  const shouldKeepListeningRef = useRef(false);
-  const voiceTimeoutRef = useRef(null);
-  const voiceRestartRef = useRef(null);
+  const isPressedRef = useRef(false);
+  const restartTimeoutRef = useRef(null);
   const tagsRef = useRef(tags);
 
   useEffect(() => {
     tagsRef.current = tags;
   }, [tags]);
 
-  const clearVoiceTimers = () => {
-    if (voiceTimeoutRef.current) {
-      clearTimeout(voiceTimeoutRef.current);
-      voiceTimeoutRef.current = null;
-    }
-    if (voiceRestartRef.current) {
-      clearTimeout(voiceRestartRef.current);
-      voiceRestartRef.current = null;
+  const clearRestartTimeout = () => {
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
     }
   };
 
   const stopListening = () => {
-    shouldKeepListeningRef.current = false;
-    clearVoiceTimers();
+    isPressedRef.current = false;
+    clearRestartTimeout();
     isListeningRef.current = false;
     setIsListening(false);
     setVoiceStatus("");
@@ -296,18 +315,20 @@ function TagInput({ tags, onChange }) {
     }
   };
 
-  const extendListeningWindow = () => {
-    if (!shouldKeepListeningRef.current) return;
-    clearVoiceTimers();
-    voiceTimeoutRef.current = setTimeout(() => {
-      if (!shouldKeepListeningRef.current) return;
-      shouldKeepListeningRef.current = false;
-      setIsListening(false);
-      setVoiceStatus("Voice input paused after 5 seconds. Tap Voice to continue.");
+  const restartVoiceCapture = () => {
+    if (!isPressedRef.current || !recognitionRef.current) {
+      return;
+    }
+
+    clearRestartTimeout();
+    restartTimeoutRef.current = setTimeout(() => {
+      if (!isPressedRef.current || !recognitionRef.current) {
+        return;
+      }
       try {
-        recognitionRef.current?.stop();
+        recognitionRef.current.start();
       } catch (e) {}
-    }, 5000);
+    }, 250);
   };
 
   useEffect(() => {
@@ -334,17 +355,15 @@ function TagInput({ tags, onChange }) {
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = "en-US";
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
-      shouldKeepListeningRef.current = true;
       isListeningRef.current = true;
       setIsListening(true);
       setVoiceStatus("Listening for ingredients...");
-      extendListeningWindow();
     };
 
     recognition.onresult = (event) => {
@@ -372,42 +391,33 @@ function TagInput({ tags, onChange }) {
           onChange([...tagsRef.current, ...newTags]);
         }
         setInputVal("");
-        setVoiceStatus("Ingredients added from voice input.");
-        extendListeningWindow();
+        setVoiceStatus("Ingredient saved. Keep holding to add more.");
+        restartVoiceCapture();
       } else if (interimText) {
         setInputVal(interimText);
         setVoiceStatus("Listening for ingredients...");
-        extendListeningWindow();
       }
     };
 
     recognition.onend = () => {
-      if (!shouldKeepListeningRef.current) {
+      if (isPressedRef.current) {
+        setIsListening(true);
+        setVoiceStatus("Listening for ingredients...");
+        restartVoiceCapture();
+      } else {
         setIsListening(false);
         setVoiceStatus("");
-        return;
       }
-
-      setIsListening(true);
-      setVoiceStatus("Listening for ingredients...");
-      extendListeningWindow();
-      voiceRestartRef.current = setTimeout(() => {
-        if (shouldKeepListeningRef.current && recognitionRef.current) {
-          try {
-            recognitionRef.current.start();
-          } catch (e) {}
-        }
-      }, 150);
     };
 
     recognition.onerror = (event) => {
       if (event.error === "not-allowed") {
         stopListening();
         setVoiceStatus("Microphone access was blocked. Please allow it in your browser settings and try again.");
-      } else if (shouldKeepListeningRef.current && event.error !== "aborted") {
+      } else if (isPressedRef.current && event.error !== "aborted") {
         setIsListening(true);
         setVoiceStatus("Listening for ingredients...");
-        extendListeningWindow();
+        restartVoiceCapture();
       } else {
         setIsListening(false);
         isListeningRef.current = false;
@@ -436,9 +446,8 @@ function TagInput({ tags, onChange }) {
     }
   };
 
-  const toggleVoiceInput = async () => {
+  const startVoiceCapture = async () => {
     if (isListening) {
-      stopListening();
       return;
     }
 
@@ -452,19 +461,24 @@ function TagInput({ tags, onChange }) {
         setVoiceStatus("Requesting microphone permission...");
         await navigator.mediaDevices.getUserMedia({ audio: true });
       }
-      shouldKeepListeningRef.current = true;
+      isPressedRef.current = true;
       isListeningRef.current = true;
       setIsListening(true);
       setVoiceStatus("Listening for ingredients...");
-      extendListeningWindow();
       recognition.start();
     } catch (e) {
-      shouldKeepListeningRef.current = false;
-      clearVoiceTimers();
+      isPressedRef.current = false;
       isListeningRef.current = false;
       setIsListening(false);
       setVoiceStatus("Microphone permission was blocked or unavailable. Please allow it in your browser settings and try again.");
     }
+  };
+
+  const endVoiceCapture = () => {
+    if (!isListening) {
+      return;
+    }
+    stopListening();
   };
 
   return (
@@ -487,9 +501,31 @@ function TagInput({ tags, onChange }) {
             onBlur={() => inputVal.trim() && addTag(inputVal)}
           />
         </div>
-        <button type="button" className={`voice-btn ${isListening ? "listening" : ""}`} onClick={toggleVoiceInput}>
+        <button
+          type="button"
+          className={`voice-btn ${isListening ? "listening" : ""}`}
+          onMouseDown={startVoiceCapture}
+          onMouseUp={endVoiceCapture}
+          onMouseLeave={endVoiceCapture}
+          onTouchStart={startVoiceCapture}
+          onTouchEnd={endVoiceCapture}
+          onTouchCancel={endVoiceCapture}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              startVoiceCapture();
+            }
+          }}
+          onKeyUp={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              endVoiceCapture();
+            }
+          }}
+          onBlur={endVoiceCapture}
+        >
           <i className={`ti ${isListening ? "ti-player-stop-filled" : "ti-microphone"}`} aria-hidden="true" />
-          {isListening ? "Stop" : "Voice"}
+          {isListening ? "Listening" : "Voice"}
         </button>
       </div>
       <div className="tag-hint">
@@ -598,9 +634,13 @@ function ComparisonView({ regular, light }) {
       </div>
       {light.changes && light.changes.length > 0 && (
         <div className="light-changes">
-          <div style={{fontSize:13, fontWeight:500, color:"#185fa5", marginTop:14, marginBottom:6}}>What changes in the light version</div>
+          <div style={{fontSize:13, fontWeight:500, color:"#185fa5", marginTop:14, marginBottom:6}}>Exact substitutions</div>
           {light.changes.map((change, i) => (
-            <div className="light-change-item" key={i}>{change}</div>
+            <div className="light-change-item" key={i}>
+              <span className="swap-from">{change.from}</span>
+              <i className="ti ti-arrow-right" aria-hidden="true" />
+              <span className="swap-to">{change.to}</span>
+            </div>
           ))}
         </div>
       )}
@@ -608,9 +648,119 @@ function ComparisonView({ regular, light }) {
   );
 }
 
+function MealFeedback({ mealId }) {
+  const [rating, setRating] = useState(0);
+  const [ratingStatus, setRatingStatus] = useState("idle");
+  const [comment, setComment] = useState("");
+  const [commentStatus, setCommentStatus] = useState("idle");
+
+  const submitRating = async (value) => {
+    setRating(value);
+    setRatingStatus("saving");
+    try {
+      const response = await fetch(`${getApiBase()}/api/history/rate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meal_id: mealId, rating: value, user_id: "default" }),
+      });
+      const data = await response.json();
+      setRatingStatus(data.ok ? "saved" : "error");
+    } catch (e) {
+      setRatingStatus("error");
+    }
+  };
+
+  const submitComment = async () => {
+    if (!comment.trim()) return;
+    setCommentStatus("saving");
+    try {
+      const response = await fetch(`${getApiBase()}/api/history/comment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meal_id: mealId, comment: comment.trim(), user_id: "default" }),
+      });
+      const data = await response.json();
+      setCommentStatus(data.ok ? "saved" : "error");
+    } catch (e) {
+      setCommentStatus("error");
+    }
+  };
+
+  return (
+    <div className="feedback-section">
+      <div className="rating-row">
+        <span className="rating-label">Rate this meal</span>
+        {[1, 2, 3, 4, 5].map((value) => (
+          <button
+            key={value}
+            type="button"
+            className={`star-btn ${value <= rating ? "filled" : ""}`}
+            onClick={() => submitRating(value)}
+            aria-label={`Rate ${value} star${value > 1 ? "s" : ""}`}
+          >
+            <i className={`ti ${value <= rating ? "ti-star-filled" : "ti-star"}`} aria-hidden="true" />
+          </button>
+        ))}
+        {ratingStatus === "saving" && <span className="feedback-status">Saving...</span>}
+        {ratingStatus === "saved" && <span className="feedback-status">Saved</span>}
+        {ratingStatus === "error" && <span className="feedback-status error">Couldn't save rating</span>}
+      </div>
+      <div className="comment-row">
+        <textarea
+          className="comment-input"
+          placeholder="Add a comment about this meal..."
+          value={comment}
+          onChange={(e) => { setComment(e.target.value); setCommentStatus("idle"); }}
+        />
+        <div className="comment-actions">
+          <button
+            type="button"
+            className="save-btn"
+            disabled={!comment.trim() || commentStatus === "saving"}
+            onClick={submitComment}
+          >
+            {commentStatus === "saving" ? "Saving..." : "Save comment"}
+          </button>
+          {commentStatus === "saved" && <span className="feedback-status">Saved</span>}
+          {commentStatus === "error" && <span className="feedback-status error">Couldn't save comment</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MealCard({ meal }) {
   const [showLight, setShowLight] = useState(false);
+  const [supplements, setSupplements] = useState([]);
   const missingGroups = FOOD_GROUPS.filter(g => (meal.foodGroups[g] || 0) < 0.25);
+  const missingGroupsKey = missingGroups.join(",");
+
+  useEffect(() => {
+    if (!missingGroupsKey) {
+      setSupplements([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${getApiBase()}/api/suggest-supplements`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        meal_name: meal.name,
+        ingredients: meal.ingredients,
+        missing_food_groups: missingGroups,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Request failed"))))
+      .then((data) => {
+        if (!cancelled) setSupplements(Array.isArray(data.supplements) ? data.supplements : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSupplements([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [missingGroupsKey, meal.name]);
   const prepTime = meal.prepTimeMinutes || 0;
   const cookTime = meal.cookTimeMinutes || 0;
   const totalTime = prepTime + cookTime;
@@ -663,19 +813,21 @@ function MealCard({ meal }) {
           ))}
         </div>
 
-        {missingGroups.length > 0 && meal.supplements && (
+        {missingGroups.length > 0 && supplements.length > 0 && (
           <div className="supplements">
             <div className="supp-title">
               <i className="ti ti-plus-health" aria-hidden="true" />
               Bridge the gap — suggested supplements
             </div>
             <div className="supp-list">
-              {(meal.supplements || []).map((s, i) => (
+              {supplements.map((s, i) => (
                 <span className="supp-pill" key={i}>{s}</span>
               ))}
             </div>
           </div>
         )}
+
+        <MealFeedback mealId={meal.id} />
       </div>
 
       {meal.light && (
@@ -696,6 +848,72 @@ function MealCard({ meal }) {
     </div>
   );
 }
+
+const normalizeNutrition = (nutrition) => {
+  const source = nutrition || {};
+  return {
+    calories: source.calories ?? source.kcal ?? 0,
+    protein: source.protein ?? source.protein_g ?? 0,
+    carbs: source.carbs ?? source.carbs_g ?? 0,
+    fat: source.fat ?? source.fat_g ?? 0,
+    fiber: source.fiber ?? source.fiber_g ?? 0,
+    sodium: source.sodium ?? source.sodium_mg ?? 0,
+    sugar: source.sugar ?? source.sugar_g ?? 0,
+  };
+};
+
+const normalizeMeal = (meal) => {
+  const ingredientText = (meal?.ingredients || []).join(" ").toLowerCase();
+  const normalizedNutrition = normalizeNutrition(meal?.nutrition);
+
+  const foodGroups = {
+    Grains: 0.2,
+    Protein: 0.2,
+    Dairy: 0.0,
+    Fruits: 0.0,
+    Vegetables: 0.2,
+    Fats: 0.2,
+  };
+
+  if (ingredientText.includes("rice") || ingredientText.includes("pasta") || ingredientText.includes("bread") || ingredientText.includes("tortilla")) {
+    foodGroups.Grains = 0.7;
+  }
+  if (ingredientText.includes("chicken") || ingredientText.includes("beef") || ingredientText.includes("fish") || ingredientText.includes("tofu") || ingredientText.includes("beans") || ingredientText.includes("egg")) {
+    foodGroups.Protein = 0.8;
+  }
+  if (ingredientText.includes("cheese") || ingredientText.includes("yogurt") || ingredientText.includes("milk")) {
+    foodGroups.Dairy = 0.4;
+  }
+  if (ingredientText.includes("apple") || ingredientText.includes("banana") || ingredientText.includes("fruit") || ingredientText.includes("lemon") || ingredientText.includes("berry")) {
+    foodGroups.Fruits = 0.5;
+  }
+  if (ingredientText.includes("spinach") || ingredientText.includes("pepper") || ingredientText.includes("tomato") || ingredientText.includes("onion") || ingredientText.includes("vegetable")) {
+    foodGroups.Vegetables = 0.7;
+  }
+  if (ingredientText.includes("oil") || ingredientText.includes("butter") || ingredientText.includes("cream") || ingredientText.includes("cheese")) {
+    foodGroups.Fats = 0.5;
+  }
+
+  return {
+    id: meal?.id ?? null,
+    name: meal?.name || "Untitled meal",
+    cuisine: meal?.cuisine || "Any",
+    description: meal?.description || "",
+    nutrition: normalizedNutrition,
+    foodGroups,
+    ingredients: Array.isArray(meal?.ingredients) ? meal.ingredients : [],
+    recipeSteps: Array.isArray(meal?.instructions) ? meal.instructions : [],
+    prepTimeMinutes: meal?.prep_time_minutes ?? meal?.prepTimeMinutes ?? 0,
+    cookTimeMinutes: meal?.cook_time_minutes ?? meal?.cookTimeMinutes ?? 0,
+    complexity: meal?.difficulty || "Easy",
+    cookwareNeeded: Array.isArray(meal?.cookware) ? meal.cookware : [],
+    light: meal?.light_option ? {
+      description: meal.light_option.swap || meal.light_option.description || "A lighter version with less fat and sodium.",
+      changes: Array.isArray(meal.light_option.changes) ? meal.light_option.changes : [],
+      nutrition: normalizeNutrition(meal.light_option.nutrition),
+    } : null,
+  };
+};
 
 function App() {
   const [apiKey, setApiKey] = useState(() => {
@@ -801,89 +1019,7 @@ function App() {
     return true;
   });
 
-  const buildPrompt = () => {
-    const ingredientList = ingredients.join(", ");
-    const servingDesc = `${adults} adult${adults !== 1 ? "s" : ""}${children > 0 ? ` and ${children} child${children !== 1 ? "ren" : ""}` : ""}`;
-    const leftoverDesc = wantLeftovers
-      ? ` Plus ${leftoverAdults} adult${leftoverAdults !== 1 ? "s" : ""}${leftoverChildren > 0 ? ` and ${leftoverChildren} child${leftoverChildren !== 1 ? "ren" : ""}` : ""} for lunch leftovers tomorrow.`
-      : "";
-
-    return `You are a culinary expert and nutritionist. A user wants meal suggestions based on their available ingredients.
-
-Ingredients available: ${ingredientList || "not specified — suggest versatile meals"}
-Preferred cuisine: ${cuisine}
-Servings needed: ${servingDesc} for dinner tonight.${leftoverDesc}
-Total servings to cook for: ${totalServings}
-
-Instructions:
-1. Check if the available ingredients align with ${cuisine} cuisine. If they don't match well, note the mismatch and suggest what cuisines fit the ingredients better.
-2. Suggest exactly 3 meal ideas. Adjust quantities for ${totalServings} total servings.
-3. For each meal, provide:
-   - Nutritional values PER SERVING (calories, protein g, carbs g, fat g, fiber g, sodium mg, sugar g) — all as plain numbers
-   - Food group coverage as a decimal 0–1 (0=none, 1=excellent): Grains, Protein, Dairy, Fruits, Vegetables, Fats
-   - Exact ingredients as a list of strings with amounts and simple descriptions, such as "2 tbsp olive oil"
-   - A recipe as an array of step strings, written clearly and briefly
-   - Prep time in minutes, cook time in minutes, complexity as one of "Easy", "Medium", or "Hard", and cookwareNeeded as an array of simple items such as ["skillet", "pot"]
-   - If any food group is below 0.25, suggest 3–5 simple supplement foods to bridge the gap
-   - A "light" version that meaningfully reduces fat or sodium without sacrificing flavor — include its nutrition and a list of specific changes made
-
-Respond ONLY with valid JSON in this exact structure (no markdown, no extra text):
-{
-  "cuisineMismatch": false,
-  "mismatchExplanation": "",
-  "suggestedCuisines": [],
-  "meals": [
-    {
-      "name": "Meal Name",
-      "cuisine": "Cuisine Type",
-      "description": "2-sentence appetizing description",
-      "nutrition": {
-        "calories": 450,
-        "protein": 32,
-        "carbs": 48,
-        "fat": 14,
-        "fiber": 6,
-        "sodium": 680,
-        "sugar": 8
-      },
-      "foodGroups": {
-        "Grains": 0.8,
-        "Protein": 0.9,
-        "Dairy": 0.1,
-        "Fruits": 0.0,
-        "Vegetables": 0.7,
-        "Fats": 0.5
-      },
-      "ingredients": ["2 tbsp olive oil", "1 lb chicken thighs", "2 cups cooked rice"],
-      "recipeSteps": ["Heat the oil in a skillet.", "Cook the chicken until browned."],
-      "prepTimeMinutes": 15,
-      "cookTimeMinutes": 20,
-      "complexity": "Easy",
-      "cookwareNeeded": ["skillet", "mixing bowl"],
-      "supplements": ["Side salad with leafy greens", "Glass of milk or yogurt", "Fresh fruit for dessert"],
-      "light": {
-        "description": "Brief description of the lighter take",
-        "changes": ["Use olive oil spray instead of butter", "Reduce cheese to 1/4 amount", "Increase vegetables by 50%"],
-        "nutrition": {
-          "calories": 320,
-          "protein": 30,
-          "carbs": 45,
-          "fat": 7,
-          "fiber": 8,
-          "sodium": 420,
-          "sugar": 7
-        }
-      }
-    }
-  ]
-}`;
-  };
-
   const generate = async () => {
-    if (!apiKey.trim()) {
-      setError("Please enter your Anthropic API key to get meal suggestions.");
-      return;
-    }
     if (ingredients.length === 0) {
       setError("Please add at least one ingredient before generating suggestions.");
       return;
@@ -894,34 +1030,35 @@ Respond ONLY with valid JSON in this exact structure (no markdown, no extra text
     setResults(null);
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(`${getApiBase()}/api/suggest-meals`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
         },
         body: JSON.stringify({
-          model: "claude-opus-4-8",
-          max_tokens: 4096,
-          messages: [{ role: "user", content: buildPrompt() }]
+          ingredients,
+          cuisine: cuisine === "Any" ? null : cuisine,
+          servings: totalServings,
+          leftovers: wantLeftovers,
+          include_history_context: true,
         })
       });
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new Error(err.error?.message || `API error ${response.status}`);
+        throw new Error(err.detail?.[0]?.msg || err.message || `API error ${response.status}`);
       }
 
       const data = await response.json();
-      const text = data.content?.[0]?.text || "";
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("Could not parse response. Please try again.");
-      const parsed = JSON.parse(jsonMatch[0]);
-      setResults(parsed);
+      const normalizedMeals = (data.meals || []).map(normalizeMeal);
+      setResults({
+        cuisineMismatch: false,
+        mismatchExplanation: "",
+        suggestedCuisines: [],
+        meals: normalizedMeals,
+      });
     } catch (e) {
-      setError(e.message);
+      setError(e.message || "Could not reach the meal API.");
     } finally {
       setLoading(false);
     }
